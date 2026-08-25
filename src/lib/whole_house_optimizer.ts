@@ -1,5 +1,6 @@
 import { inferHouseAirflowNetwork, type AirflowNetworkRoom } from './house_airflow_network';
 import { SITE_LOCATION_PRESETS, type SiteLocationProfile } from './site_geometry_optimizer';
+import { adjustDegreeDaysForSetpoint, DEFAULT_DEGREE_DAY_BASE_TEMP_C, type DegreeDayClimate } from './degree_day_setpoint';
 
 export type DwellingArchetype = 'detached' | 'terrace_mid' | 'lowrise_apartment_mid' | 'tower_apartment_mid';
 export type AirflowControlStrategy = 'balanced_rooms' | 'transfer_to_wet_rooms' | 'demand_zoned';
@@ -129,6 +130,18 @@ export interface WholeHouseOptimizationResult {
     lifecycleEnergySavedKWh: number;
     lifecycleEnergySavedPercent: number;
     manufacturingEnergyDifferenceKWh: number;
+    /**
+     * Non-null when the selected design is NOT the lowest lifecycle-energy
+     * candidate, i.e. the comfort/noise/mass-balance penalties in `score`
+     * reordered the ranking. Null means selection and energy minimum agree.
+     */
+    lowestLifecycleEnergyAlternative: {
+      archetype: DwellingArchetype;
+      label: string;
+      control: AirflowControlStrategy;
+      lifecycleEnergyKWh: number;
+      additionalLifecycleEnergyOfSelectionKWh: number;
+    } | null;
     reason: string;
   };
   assumptions: string[];
@@ -271,7 +284,7 @@ function evaluateConfiguration(
   configuration: WholeHouseConfiguration,
   lifecycleYears: number,
   hvacCop: number,
-  targetTempC: number,
+  climate: DegreeDayClimate,
   siteObstruction: WholeHouseOptimizerInput['siteObstruction'],
 ): EvaluatedWholeHouseConfiguration {
   const archetype = DWELLING_ARCHETYPES[configuration.archetype];
@@ -312,7 +325,7 @@ function evaluateConfiguration(
   const roomResults: WholeHouseRoomResult[] = rooms.map((room, index) => {
     const totalFreshAndTransfer = supply[index] + network.roomInflow[index];
     const achievedAch = totalFreshAndTransfer * 3600 / volumes[index];
-    const envelopeLoadFactor = archetype.exposedEnvelopeFraction * (location.coolingDegreeDays + location.heatingDegreeDays) / 2100;
+    const envelopeLoadFactor = archetype.exposedEnvelopeFraction * (climate.coolingDegreeDays + climate.heatingDegreeDays) / 2100;
     const internalLoadFactor = Math.max(0, (room.internalLoad || room.width * room.height * 24) - 250) / 900;
     const ventilationDeficit = Math.max(0, 0.45 - achievedAch);
     const predictedDeviation = clamp(ventilationDeficit * 2.2 + envelopeLoadFactor * 0.32 + internalLoadFactor * 0.18, 0.05, 3.5);
@@ -329,7 +342,7 @@ function evaluateConfiguration(
     };
   });
 
-  const degreeDays = location.heatingDegreeDays + location.coolingDegreeDays;
+  const degreeDays = climate.heatingDegreeDays + climate.coolingDegreeDays;
   const envelopeUaWPerK = floorAreaM2 * (0.42 + archetype.exposedEnvelopeFraction * 1.28);
   const envelopeElectricalKWh = envelopeUaWPerK * degreeDays * 24 / 1000 / hvacCop;
   const ventilationUaWPerK = 1.204 * 1006 * totalFlowM3s * (1 - configuration.heatRecoveryEfficiency);
@@ -343,9 +356,9 @@ function evaluateConfiguration(
   const siteWinterAccess = clamp(Number(siteObstruction?.winterSolarAccessPercent) || 100, 5, 100);
   const effectiveSummerShadePercent = 100 - (100 - archetype.summerNeighbourShadePercent) * (100 - siteSummerShade) / 100;
   const effectiveWinterSolarAccessPercent = archetype.winterSolarAccessPercent * siteWinterAccess / 100;
-  const solarShadeCoolingCreditKWh = solarPotentialKWh * (location.coolingDegreeDays / climateTotal)
+  const solarShadeCoolingCreditKWh = solarPotentialKWh * (climate.coolingDegreeDays / climateTotal)
     * effectiveSummerShadePercent / 100 / hvacCop;
-  const winterSolarPenaltyKWh = solarPotentialKWh * (location.heatingDegreeDays / climateTotal)
+  const winterSolarPenaltyKWh = solarPotentialKWh * (climate.heatingDegreeDays / climateTotal)
     * (1 - effectiveWinterSolarAccessPercent / 100) / hvacCop;
   const totalOperationalKWh = Math.max(0, envelopeElectricalKWh + ventilationElectricalKWh + fanElectricalKWh
     - solarShadeCoolingCreditKWh + winterSolarPenaltyKWh);
@@ -440,9 +453,14 @@ export function optimizeWholeHouseSystem(rawInput: WholeHouseOptimizerInput = {}
     designAirChangesPerHour: 0.7,
   };
   const siteObstruction = rawInput.siteObstruction;
-  const baseline = evaluateConfiguration(rooms, location, baselineConfiguration, lifecycleYears, hvacCop, targetTempC, siteObstruction);
+  const presetClimate: DegreeDayClimate = {
+    heatingDegreeDays: location.heatingDegreeDays,
+    coolingDegreeDays: location.coolingDegreeDays,
+  };
+  const climate = adjustDegreeDaysForSetpoint(presetClimate, targetTempC);
+  const baseline = evaluateConfiguration(rooms, location, baselineConfiguration, lifecycleYears, hvacCop, climate, siteObstruction);
   const evaluated = configurations.map(configuration => evaluateConfiguration(
-    rooms, location, configuration, lifecycleYears, hvacCop, targetTempC, siteObstruction,
+    rooms, location, configuration, lifecycleYears, hvacCop, climate, siteObstruction,
   )).sort((a, b) => a.score - b.score || a.totalLifecycleEnergyKWh - b.totalLifecycleEnergyKWh);
   const best = evaluated[0] || baseline;
   const bestByArchetype = new Map<DwellingArchetype, EvaluatedWholeHouseConfiguration>();
@@ -480,6 +498,23 @@ export function optimizeWholeHouseSystem(rawInput: WholeHouseOptimizerInput = {}
       tradeoff,
     };
   });
+  const lowestEnergyCandidate = evaluated.reduce(
+    (lowest, candidate) => candidate.totalLifecycleEnergyKWh < lowest.totalLifecycleEnergyKWh ? candidate : lowest,
+    evaluated[0] || baseline,
+  );
+  // `best` minimises `score`, which adds comfort, noise and mass-balance penalties
+  // on top of lifecycle energy. Those penalties can and do reorder candidates, so
+  // the selected design is not necessarily the lowest-energy one. Surface the gap
+  // instead of describing the winner as an energy minimum.
+  const energyPenaltyOfSelectionKWh = best.totalLifecycleEnergyKWh - lowestEnergyCandidate.totalLifecycleEnergyKWh;
+  const selectionMatchesLowestEnergy = energyPenaltyOfSelectionKWh <= 0.005;
+  const lowestLifecycleEnergyAlternative = selectionMatchesLowestEnergy ? null : {
+    archetype: lowestEnergyCandidate.configuration.archetype,
+    label: DWELLING_ARCHETYPES[lowestEnergyCandidate.configuration.archetype].label,
+    control: lowestEnergyCandidate.configuration.control,
+    lifecycleEnergyKWh: lowestEnergyCandidate.totalLifecycleEnergyKWh,
+    additionalLifecycleEnergyOfSelectionKWh: round(energyPenaltyOfSelectionKWh),
+  };
   const annualSaved = baseline.annual.totalOperationalKWh - best.annual.totalOperationalKWh;
   const lifecycleSaved = baseline.totalLifecycleEnergyKWh - best.totalLifecycleEnergyKWh;
   const manufacturingDifference = best.manufacturing.totalKWh - baseline.manufacturing.totalKWh;
@@ -505,8 +540,12 @@ export function optimizeWholeHouseSystem(rawInput: WholeHouseOptimizerInput = {}
       lifecycleEnergySavedKWh: round(lifecycleSaved),
       lifecycleEnergySavedPercent: round(lifecycleSaved / Math.max(1, baseline.totalLifecycleEnergyKWh) * 100, 1),
       manufacturingEnergyDifferenceKWh: round(manufacturingDifference),
+      lowestLifecycleEnergyAlternative,
       reason: qualifies
-        ? `${DWELLING_ARCHETYPES[best.configuration.archetype].label} with ${best.configuration.control.replaceAll('_', ' ')} has the lowest screened lifecycle energy after airflow balance, comfort, fan, shading and manufacturing penalties.`
+        ? `${DWELLING_ARCHETYPES[best.configuration.archetype].label} with ${best.configuration.control.replaceAll('_', ' ')} has the lowest screened score, which ranks lifecycle energy together with comfort, noise and mass-balance penalties.`
+          + (lowestLifecycleEnergyAlternative
+            ? ` It is not the lowest-energy option: ${lowestLifecycleEnergyAlternative.label} screens ${Math.abs(lowestLifecycleEnergyAlternative.additionalLifecycleEnergyOfSelectionKWh).toFixed(0)} kWh lower on lifecycle energy alone, and is ranked below only because of those penalties.`
+            : ' It is also the lowest-energy option in this sweep.')
         : 'No candidate clears both the lifecycle-energy and comfort/mass-balance gates; keep the baseline until inputs are verified.',
     },
     assumptions: [
@@ -517,6 +556,8 @@ export function optimizeWholeHouseSystem(rawInput: WholeHouseOptimizerInput = {}
         ? 'Neighbouring-building shade is adjusted with a cached massing horizon screen; the 3D sun view casts the selected hour through those footprint-derived masses.'
         : 'Neighbouring-building shade is an archetype estimate. The 3D sun view uses the selected latitude and the optimized local footprint for directional shadow testing.',
       'Manufacturing energy includes a per-dwelling structure allowance plus ducts, openings, controls and heat recovery so operational savings cannot hide a larger build cost.',
+      `Preset degree days are re-evaluated at the ${round(targetTempC, 1)} degC indoor setpoint from an annual temperature profile fitted to the preset pair at a ${DEFAULT_DEGREE_DAY_BASE_TEMP_C} degC base. This is a climatology screen, not hourly weather; a preset with zero heating or zero cooling degree days constrains the annual swing poorly and extrapolates optimistically away from the base.`,
+      'Candidate selection minimises a screening score that adds comfort, noise and mass-balance penalties to lifecycle energy. Those penalty weights are calibration constants, not measured quantities, and can reorder candidates.',
     ],
   };
 }

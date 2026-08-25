@@ -64,13 +64,22 @@ release `20260826-074205`.
 ## Current verified state
 
 - `npm run test:all` passes on Node 22.
-- Eight numerical physics invariants pass (`8/8`).
+- Twelve numerical physics invariants pass (`12/12`), including setpoint degree-day
+  round-trip, setpoint monotonicity, setpoint-reaches-energy and selection disclosure.
 - The Bendigo preset loads cached open building massing (80 neighbours within the
   bounded context result at the current anchor).
 - Whole System automatically uses the massing horizon screen to adjust summer shade
   potential and winter solar access.
 - The production winner at the current Bendigo screening inputs is a low-rise middle
-  apartment. This is a model result, not a universal recommendation.
+  apartment. This is a model result, not a universal recommendation. Sensitivity
+  testing shows the ranking is driven almost entirely by the hardcoded
+  `DWELLING_ARCHETYPES` constants: the 432-candidate sweep moves lifecycle energy by
+  about 356 kWh while the archetype choice moves it by about 11,880 kWh, and
+  substituting published-order embodied-energy factors reverses the ranking.
+  Treat the winner as a restatement of those constants until item 7 is resolved.
+- The requested indoor setpoint now reaches the physics through setpoint-corrected
+  degree days (`src/lib/degree_day_setpoint.ts`). It was previously accepted by the
+  API and UI and never used.
 - The production UI shows the top three lifecycle designs, evidence completeness,
   uncertainty and a downloadable JSON screening report.
 - A clean Chrome verification loaded `assets/index-i4jKbk7x.js` with no console errors.
