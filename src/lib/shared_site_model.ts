@@ -44,6 +44,12 @@ export interface SharedSiteModel {
    * (priority queue item 4) rather than tuned.
    */
   designDiurnalSwingC: number;
+  /**
+   * Opaque wall thermal resistance for the envelope every panel screens.
+   * The site optimizer took this as `minWallRValue` (3) while the adaptive-wall
+   * panel screened `staticWallRValue` (2.5) - two R-values for one wall.
+   */
+  wallRValue: number;
 }
 
 export const DEFAULT_SHARED_SITE_MODEL: SharedSiteModel = {
@@ -54,6 +60,7 @@ export const DEFAULT_SHARED_SITE_MODEL: SharedSiteModel = {
   hvacCop: 3.6,
   conditioningDaysPerYear: 180,
   designDiurnalSwingC: 12,
+  wallRValue: 3,
 };
 
 /** The outdoor day range a transient panel should screen against, per mode. */
@@ -91,6 +98,7 @@ export const SHARED_FIELD_PROJECTIONS = {
   adaptiveWall: (model: SharedSiteModel) => {
     const range = outdoorDayRangeC(model, 'cooling');
     return {
+      staticWallRValue: model.wallRValue,
       indoorTempC: model.targetIndoorTempC,
       lifecycleYears: model.lifecycleYears,
       hvacCop: model.hvacCop,
@@ -108,6 +116,7 @@ export const SHARED_FIELD_PROJECTIONS = {
     ...model.location,
     targetIndoorTempC: model.targetIndoorTempC,
     lifecycleYears: model.lifecycleYears,
+    minWallRValue: model.wallRValue,
   }),
   wholeHouse: (model: SharedSiteModel) => ({
     location: { ...model.location },
