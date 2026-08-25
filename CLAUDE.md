@@ -16,6 +16,11 @@ possible while being honest about uncertainty. It must never present screening o
 as certified engineering, code compliance, CFD, an energy rating or a construction
 approval.
 
+The source-audited numerical handoff for embodied energy, comfort, solar inputs and
+ASHRAE Standard 140 / BESTEST is in
+[`docs/REFERENCE_DATA_HANDOFF.md`](docs/REFERENCE_DATA_HANDOFF.md). Read its
+model-use contract before changing constants, calibration targets or evidence labels.
+
 The deployed site is <https://abovebound.org>. The handoff baseline is production
 release `20260826-074205`.
 
