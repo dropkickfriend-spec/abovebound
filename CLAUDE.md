@@ -48,6 +48,14 @@ release `20260826-074205`.
   subject/neighbour selection, evidence completeness and azimuth-horizon obstruction.
 - `src/lib/building_physics_validation.ts`: level-1 numerical invariants. These are
   regression checks, not external validation.
+- `src/lib/shared_site_model.ts`: single source of truth for the quantities every
+  panel screens the same building against (site, indoor setpoint, lifecycle horizon,
+  HVAC COP, wall R-value). Upstream-wins projection with reported overrides.
+- `src/lib/panel_coupling.ts`: derives downstream panel inputs from upstream results
+  (chosen form, chosen airflow configuration) so panels simulate each other's effects.
+  Adds no constants; every coupled field carries provenance.
+- `src/lib/degree_day_setpoint.ts`: setpoint-corrected degree days recovered from a
+  preset `(HDD, CDD)` pair. Round-trips exactly at the base temperature.
 - `src/lib/house_airflow_network.ts` and `src/lib/height_airflow.ts`: inferred shared
   boundaries, transfer paths, roof routes and height-aware reduced-order airflow.
 - `src/lib/hvac_cycle_optimizer.ts`: transient thermostat/cycling and source-recovery
