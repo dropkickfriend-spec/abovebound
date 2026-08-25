@@ -22,7 +22,9 @@
     "test:physics-validation": "tsx scripts/building-physics-validation-smoke.ts",
     "test:site-context": "tsx scripts/site-context-smoke.ts",
     "site-context:import": "tsx scripts/import-site-context.ts",
-    "test:all": "npm run lint && npm run test:sims && npm run test:optimizer && npm run test:site && npm run test:existing-home && npm run test:hvac-cycle && npm run test:adaptive-wall && npm run test:height-airflow && npm run test:airflow-network && npm run test:whole-house && npm run test:physics-validation && npm run test:site-context && npm run build"
+    "test:all": "npm run lint && npm run test:sims && npm run test:optimizer && npm run test:site && npm run test:existing-home && npm run test:hvac-cycle && npm run test:adaptive-wall && npm run test:height-airflow && npm run test:airflow-network && npm run test:whole-house && npm run test:physics-validation && npm run test:site-context && npm run test:shared-site-model && npm run test:panel-coupling && npm run build",
+    "test:shared-site-model": "tsx scripts/shared-site-model-smoke.ts",
+    "test:panel-coupling": "tsx scripts/panel-coupling-smoke.ts"
   },
   "dependencies": {
     "@tailwindcss/vite": "^4.1.14",

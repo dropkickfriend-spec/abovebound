@@ -75,6 +75,21 @@ import type { WholeHouseOptimizationResult } from './lib/whole_house_optimizer';
 import type { BuildingPhysicsValidationReport } from './lib/building_physics_validation';
 import type { AutomaticSiteContextResult } from './lib/site_context';
 import {
+  applyCoupledFields,
+  coupleAdaptiveWallInputs,
+  coupleHvacCycleInputs,
+  coupleRoomOptimizerInputs,
+  type CoupledField,
+  type UpstreamSiteDesign,
+} from './lib/panel_coupling';
+import { adjustDegreeDaysForSetpoint } from './lib/degree_day_setpoint';
+import {
+  DEFAULT_SHARED_SITE_MODEL,
+  applySharedModel,
+  type FieldOverride,
+  type SharedSiteModel,
+} from './lib/shared_site_model';
+import {
   SITE_LOCATION_PRESETS,
   type BushfireAttackLevel,
   type SiteGeometryOptimizationResult,
@@ -2668,6 +2683,18 @@ const HouseView = ({
   const [roomOptimizationError, setRoomOptimizationError] = useState('');
   const [roomOptimizationRunning, setRoomOptimizationRunning] = useState(false);
   const [roomOptimizationApplied, setRoomOptimizationApplied] = useState(false);
+  // ── Shared site model ──
+  // Single source of truth for the quantities every panel screens the SAME
+  // building against: site, indoor setpoint, lifecycle horizon, HVAC COP.
+  // These were previously duplicated per panel and drifted apart - lifecycle
+  // horizon alone was 15/20/20/25/30 years across five panels that each print
+  // a "% lifecycle saving" headline side by side. Upstream wins: a change here
+  // overwrites the matching field in every panel and reports what it replaced.
+  const [sharedSiteModel, setSharedSiteModel] = useState<SharedSiteModel>(DEFAULT_SHARED_SITE_MODEL);
+  const [sharedOverrides, setSharedOverrides] = useState<FieldOverride[]>([]);
+  // Fields whose value was derived from an upstream panel's RESULT rather than
+  // typed in, with the provenance shown so a coupled number is traceable.
+  const [coupledFields, setCoupledFields] = useState<CoupledField[]>([]);
   const [roomOptimizationInputs, setRoomOptimizationInputs] = useState({
     targetTempC: 22,
     outdoorDesignTempC: 35,
@@ -2790,6 +2817,81 @@ const HouseView = ({
     maxUnsupportedSpanM: 8,
     minimumSetbackM: 1.5,
   });
+
+  // Propagate the shared site model into every panel. Runs when the shared
+  // model changes (or the transient mode flips, which re-derives the outdoor
+  // day range). Panel-local parameters are preserved; only shared fields are
+  // overwritten, and each replaced value is reported rather than silently
+  // discarded. Deliberately NOT keyed on the panel inputs themselves: that
+  // would revert a hand edit on every keystroke instead of at the point the
+  // shared model actually moves.
+  useEffect(() => {
+    const room = applySharedModel('roomOptimizer', sharedSiteModel, roomOptimizationInputs);
+    const hvac = applySharedModel('hvacCycle', sharedSiteModel, hvacCycleInputs, thermalMode);
+    const wall = applySharedModel('adaptiveWall', sharedSiteModel, adaptiveWallInputs);
+    const autopilot = applySharedModel('autopilot', sharedSiteModel, autopilotInputs);
+    const site = applySharedModel('siteOptimizer', sharedSiteModel, siteOptimizationInputs);
+    const overrides = [
+      ...room.overrides, ...hvac.overrides, ...wall.overrides,
+      ...autopilot.overrides, ...site.overrides,
+    ];
+    if (!overrides.length) return;
+    setRoomOptimizationInputs(room.inputs);
+    setHvacCycleInputs(hvac.inputs);
+    setAdaptiveWallInputs(wall.inputs);
+    setAutopilotInputs(autopilot.inputs);
+    setSiteOptimizationInputs(site.inputs);
+    setSharedOverrides(overrides);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sharedSiteModel, thermalMode]);
+
+  // Couple downstream panels to upstream RESULTS. Sharing inputs stops the
+  // panels contradicting each other about the site; this makes them simulate
+  // each other's effects. Before it, running the site optimizer changed nothing
+  // downstream: the cycling panel kept screening a hardcoded 18 m2 room with a
+  // hardcoded 75.6 W/K envelope and 0.7 ACH whatever the design turned out to be.
+  useEffect(() => {
+    const best = siteOptimization?.best;
+    const upstreamDesign: UpstreamSiteDesign | null = best ? {
+      floorAreaM2: best.design.floorAreaM2,
+      ceilingHeightM: best.design.ceilingHeightM,
+      externalWallAreaM2: best.externalWallAreaM2,
+      envelopeThermalKWh: best.operational.envelopeHeatingKWh + best.operational.envelopeCoolingKWh,
+      rooms: (best.rooms || []).map(room => ({
+        name: room.name,
+        floorAreaM2: room.width * room.depth,
+        internalLoadW: room.internalLoadW,
+      })),
+    } : null;
+    const upstreamWholeHouse = wholeHouseOptimization?.best ? {
+      designAirChangesPerHour: wholeHouseOptimization.best.configuration.designAirChangesPerHour,
+      heatRecoveryEfficiency: wholeHouseOptimization.best.configuration.heatRecoveryEfficiency,
+    } : null;
+    if (!upstreamDesign && !upstreamWholeHouse) return;
+
+    // Degree days at the shared setpoint, so the back-calculated envelope
+    // conductance is consistent with the load the site optimizer reported.
+    const climate = adjustDegreeDaysForSetpoint(
+      {
+        heatingDegreeDays: sharedSiteModel.location.heatingDegreeDays,
+        coolingDegreeDays: sharedSiteModel.location.coolingDegreeDays,
+      },
+      sharedSiteModel.targetIndoorTempC,
+    );
+    const degreeDays = climate.heatingDegreeDays + climate.coolingDegreeDays;
+
+    const hvac = applyCoupledFields(
+      hvacCycleInputs, coupleHvacCycleInputs(upstreamDesign, upstreamWholeHouse, degreeDays));
+    const wall = applyCoupledFields(adaptiveWallInputs, coupleAdaptiveWallInputs(upstreamDesign));
+    const room = applyCoupledFields(roomOptimizationInputs, coupleRoomOptimizerInputs(upstreamDesign));
+    const applied = [...hvac.applied, ...wall.applied, ...room.applied];
+    if (!applied.length) return;
+    setHvacCycleInputs(hvac.inputs);
+    setAdaptiveWallInputs(wall.inputs);
+    setRoomOptimizationInputs(room.inputs);
+    setCoupledFields(applied);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [siteOptimization, wholeHouseOptimization, sharedSiteModel]);
 
   useEffect(() => {
     if (initialPanel) setActivePanel(initialPanel);
@@ -3800,6 +3902,71 @@ const HouseView = ({
 
   return (
     <div className="bg-white/5 rounded-xl border border-white/10 p-6 min-h-[600px]">
+      {/* Shared site model: one site, setpoint, lifecycle horizon and COP for
+          every panel. Panels previously held their own copies, so their
+          "% lifecycle saving" headlines were computed over different horizons
+          and shown side by side as if comparable. */}
+      <div className="mb-4 rounded-lg border border-cyan-500/25 bg-cyan-500/5 p-3">
+        <div className="flex items-center justify-between gap-3 flex-wrap">
+          <div className="text-[10px] font-black uppercase tracking-wider text-cyan-300">
+            Shared site model &bull; applies to every panel
+          </div>
+          <div className="flex items-center gap-3 flex-wrap">
+            {([
+              { key: 'targetIndoorTempC', label: 'Setpoint', unit: '\u00b0C', min: 15, max: 30, step: 0.5 },
+              { key: 'lifecycleYears', label: 'Lifecycle', unit: 'yr', min: 5, max: 60, step: 1 },
+              { key: 'hvacCop', label: 'COP', unit: '', min: 1, max: 8, step: 0.1 },
+            ] as const).map(field => (
+              <label key={field.key} className="flex items-center gap-1.5 text-[10px] text-gray-300">
+                <span className="text-gray-500 uppercase">{field.label}</span>
+                <input
+                  type="number"
+                  value={sharedSiteModel[field.key]}
+                  min={field.min}
+                  max={field.max}
+                  step={field.step}
+                  onChange={event => {
+                    const next = Number(event.target.value);
+                    if (!Number.isFinite(next)) return;
+                    setSharedSiteModel(current => ({ ...current, [field.key]: next }));
+                  }}
+                  className="w-16 bg-black/40 border border-white/15 rounded px-1.5 py-0.5 font-mono text-cyan-300"
+                />
+                <span className="text-gray-600">{field.unit}</span>
+              </label>
+            ))}
+          </div>
+        </div>
+        {coupledFields.length > 0 && (
+          <div className="mt-2 pt-2 border-t border-cyan-500/15">
+            <div className="text-[9px] uppercase tracking-wider text-emerald-300/80 mb-1">
+              {coupledFields.length} downstream {coupledFields.length === 1 ? 'input is' : 'inputs are'} derived from upstream results
+            </div>
+            <div className="flex flex-wrap gap-x-3 gap-y-0.5">
+              {coupledFields.map(entry => (
+                <span key={entry.field} className="text-[9px] font-mono text-gray-400">
+                  {entry.field}: <span className="text-emerald-300">{entry.value}</span>
+                  <span className="text-gray-600"> &larr; {entry.derivedFrom}</span>
+                </span>
+              ))}
+            </div>
+          </div>
+        )}
+        {sharedOverrides.length > 0 && (
+          <div className="mt-2 pt-2 border-t border-cyan-500/15">
+            <div className="text-[9px] uppercase tracking-wider text-amber-300/80 mb-1">
+              Overrode {sharedOverrides.length} panel {sharedOverrides.length === 1 ? 'value' : 'values'} to keep the model consistent
+            </div>
+            <div className="flex flex-wrap gap-x-3 gap-y-0.5">
+              {sharedOverrides.map(entry => (
+                <span key={`${entry.panel}-${entry.field}`} className="text-[9px] font-mono text-gray-400">
+                  {entry.panel}.{entry.field}: <span className="text-gray-500 line-through">{entry.from}</span> &rarr; <span className="text-cyan-300">{entry.to}</span>
+                </span>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
       {/* Header */}
       <div className="flex items-center justify-between mb-6">
         <div className="flex items-center gap-4">

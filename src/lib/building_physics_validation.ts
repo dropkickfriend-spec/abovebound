@@ -1,8 +1,9 @@
 import { calculateSolarPosition, SITE_LOCATION_PRESETS } from './site_geometry_optimizer';
 import { optimizeWholeHouseSystem } from './whole_house_optimizer';
+import { adjustDegreeDaysForSetpoint, DEFAULT_DEGREE_DAY_BASE_TEMP_C } from './degree_day_setpoint';
 
 export type PhysicsValidationStatus = 'pass' | 'warn' | 'fail';
-export type PhysicsValidationCategory = 'solar' | 'shadow' | 'conduction' | 'ventilation' | 'mass_balance' | 'determinism' | 'lifecycle';
+export type PhysicsValidationCategory = 'solar' | 'shadow' | 'conduction' | 'ventilation' | 'mass_balance' | 'determinism' | 'lifecycle' | 'climate' | 'selection';
 
 export interface PhysicsValidationCase {
   id: string;
@@ -114,6 +115,56 @@ export function runBuildingPhysicsValidation(): BuildingPhysicsValidationReport 
     'lifecycle-accounting', 'lifecycle', 'Lifecycle energy accounting',
     lifecycleExpected, first.best.totalLifecycleEnergyKWh, 0.2, 'kWh', 'accounting invariant',
     'Checks operational energy over the selected 30-year horizon plus manufacturing energy.',
+  ));
+
+
+  // --- Setpoint-corrected degree days (indoor setpoint must reach the physics) ---
+  const bendigoClimate = {
+    heatingDegreeDays: SITE_LOCATION_PRESETS.bendigo.heatingDegreeDays,
+    coolingDegreeDays: SITE_LOCATION_PRESETS.bendigo.coolingDegreeDays,
+  };
+  const atBase = adjustDegreeDaysForSetpoint(bendigoClimate, DEFAULT_DEGREE_DAY_BASE_TEMP_C);
+  cases.push(makeCase(
+    'setpoint-degree-day-identity', 'climate', 'Degree days round-trip at the base temperature',
+    bendigoClimate.heatingDegreeDays, atBase.heatingDegreeDays, 0.01, 'K-day', 'accounting identity',
+    'Re-evaluating a preset degree-day pair at its own base temperature must return the preset unchanged.',
+  ));
+
+  const warmer = adjustDegreeDaysForSetpoint(bendigoClimate, 24);
+  const warmerIncreasesHeating = warmer.heatingDegreeDays > atBase.heatingDegreeDays
+    && warmer.coolingDegreeDays < atBase.coolingDegreeDays;
+  cases.push(makeCase(
+    'setpoint-degree-day-monotonic', 'climate', 'Degree days respond monotonically to setpoint',
+    1, warmerIncreasesHeating ? 1 : 0, 0, 'boolean', 'monotonic behaviour invariant',
+    'Raising the indoor setpoint must increase heating degree days and reduce cooling degree days.',
+  ));
+
+  const atMildSetpoint = optimizeWholeHouseSystem({ targetTempC: 20, maximumCandidates: 576 });
+  const atWarmSetpoint = optimizeWholeHouseSystem({ targetTempC: 24, maximumCandidates: 576 });
+  const setpointReachesEnergy = atWarmSetpoint.best.annual.totalOperationalKWh
+    > atMildSetpoint.best.annual.totalOperationalKWh;
+  cases.push(makeCase(
+    'setpoint-reaches-operational-energy', 'climate', 'Indoor setpoint changes operational energy',
+    1, setpointReachesEnergy ? 1 : 0, 0, 'boolean', 'regression invariant',
+    'Regression guard: the requested indoor setpoint was previously accepted and never used, so the control had no effect on any result.',
+  ));
+
+  // --- Selection honesty (the winner minimises score, not energy) ---
+  // `ranked` is only the top slice by score, so it cannot stand in for the full
+  // sweep. Check the disclosure is self-consistent instead: when an alternative
+  // is reported it must genuinely beat the selection on energy by the stated
+  // margin, and when none is reported nothing visible may beat it.
+  const alternative = first.improvement.lowestLifecycleEnergyAlternative;
+  const selectionIsDisclosed = alternative
+    ? alternative.lifecycleEnergyKWh < first.best.totalLifecycleEnergyKWh
+      && Math.abs((first.best.totalLifecycleEnergyKWh - alternative.lifecycleEnergyKWh)
+        - alternative.additionalLifecycleEnergyOfSelectionKWh) <= 0.02
+    : first.ranked.every(candidate => candidate.totalLifecycleEnergyKWh
+        >= first.best.totalLifecycleEnergyKWh - 0.005);
+  cases.push(makeCase(
+    'selection-energy-disclosure', 'selection', 'Score-based selection discloses the energy minimum',
+    1, selectionIsDisclosed ? 1 : 0, 0, 'boolean', 'evidence-labelling invariant',
+    'The winner minimises a penalised score. Whenever a lower lifecycle-energy candidate exists it must be reported, not described as the energy minimum.',
   ));
 
   const passed = cases.filter(item => item.status === 'pass').length;
