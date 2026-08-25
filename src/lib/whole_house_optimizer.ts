@@ -1,6 +1,7 @@
 import { inferHouseAirflowNetwork, type AirflowNetworkRoom } from './house_airflow_network';
 import { SITE_LOCATION_PRESETS, type SiteLocationProfile } from './site_geometry_optimizer';
 import { adjustDegreeDaysForSetpoint, DEFAULT_DEGREE_DAY_BASE_TEMP_C, type DegreeDayClimate } from './degree_day_setpoint';
+import { COMFORT_CRITERIA, embodiedEvidenceFor, type EvidenceConfidence } from './evidence_sources';
 
 export type DwellingArchetype = 'detached' | 'terrace_mid' | 'lowrise_apartment_mid' | 'tower_apartment_mid';
 export type AirflowControlStrategy = 'balanced_rooms' | 'transfer_to_wet_rooms' | 'demand_zoned';
@@ -35,6 +36,22 @@ export interface DwellingArchetypeProfile {
   winterSolarAccessPercent: number;
   riserHeightM: number;
   buildingEmbodiedKWhPerM2: number;
+  /**
+   * Evidence status of `buildingEmbodiedKWhPerM2`.
+   *
+   * Sensitivity testing shows this single constant, not the 432-candidate
+   * sweep, decides the archetype ranking: the sweep moves lifecycle energy by
+   * ~356 kWh while the archetype choice moves it by ~11,880 kWh, and
+   * substituting published-order factors reverses the ranking outright. It must
+   * therefore never be presented as a measured quantity when it is not.
+   */
+  embodiedEvidence: {
+    /** False = an unsourced screening assumption. */
+    sourced: boolean;
+    confidence: EvidenceConfidence | 'assumption';
+    sourceBoundary: string;
+    note: string;
+  };
 }
 
 export interface WholeHouseConfiguration {
@@ -94,7 +111,18 @@ export interface EvaluatedWholeHouseConfiguration {
     estimatedNoiseDbA: number;
     sharedTransferFlowLs: number;
   };
+  /** Screening constraints. Gate feasibility; never contribute to `score`. */
+  constraints: {
+    comfortPass: boolean;
+    noisePass: boolean;
+    massBalancePass: boolean;
+    comfortExceedanceC: number;
+    noiseExceedanceDbA: number;
+    massBalanceExceedanceLs: number;
+  };
+  feasible: boolean;
   totalLifecycleEnergyKWh: number;
+  /** Lifecycle energy alone. No comfort, noise or mass-balance term. */
   score: number;
 }
 
@@ -108,6 +136,9 @@ export interface ArchetypeComparison {
   lifecycleEnergyKWh: number;
   annualEnergyVsDetachedPercent: number;
   lifecycleEnergyVsDetachedPercent: number;
+  /** Embodied-energy evidence status. Drives the ranking; usually unsourced. */
+  embodiedKWhPerM2: number;
+  embodiedEvidence: DwellingArchetypeProfile['embodiedEvidence'];
   tradeoff: string;
 }
 
@@ -154,6 +185,11 @@ export const DWELLING_ARCHETYPES: Record<DwellingArchetype, DwellingArchetypePro
     exposedEnvelopeFraction: 1, sharedConditionedBoundaryPercent: 0,
     summerNeighbourShadePercent: 4, winterSolarAccessPercent: 96,
     riserHeightM: 2.8, buildingEmbodiedKWhPerM2: 405,
+    embodiedEvidence: {
+      sourced: false, confidence: 'assumption',
+      sourceBoundary: 'unsourced screening assumption',
+      note: 'The only qualifying Australian evidence (UNSW 2007 detached estates) reports 1,778-1,972 kWh/m2 on an older initial as-built materials boundary - about 4.5x this value. Not adopted here because changing it alone would reverse the ranking while the terrace and apartment factors remain unsourced, producing a differently-wrong answer. See EMBODIED_ENERGY_EVIDENCE.',
+    },
   },
   terrace_mid: {
     id: 'terrace_mid', label: 'Mid-row / terrace',
@@ -161,6 +197,11 @@ export const DWELLING_ARCHETYPES: Record<DwellingArchetype, DwellingArchetypePro
     exposedEnvelopeFraction: 0.68, sharedConditionedBoundaryPercent: 32,
     summerNeighbourShadePercent: 14, winterSolarAccessPercent: 86,
     riserHeightM: 5.6, buildingEmbodiedKWhPerM2: 350,
+    embodiedEvidence: {
+      sourced: false, confidence: 'assumption',
+      sourceBoundary: 'unsourced screening assumption',
+      note: 'No qualifying source exists: the audited Sydney study combines townhouses and apartments and cannot isolate a mid-row dwelling.',
+    },
   },
   lowrise_apartment_mid: {
     id: 'lowrise_apartment_mid', label: 'Low-rise middle apartment',
@@ -168,6 +209,11 @@ export const DWELLING_ARCHETYPES: Record<DwellingArchetype, DwellingArchetypePro
     exposedEnvelopeFraction: 0.42, sharedConditionedBoundaryPercent: 58,
     summerNeighbourShadePercent: 27, winterSolarAccessPercent: 73,
     riserHeightM: 12, buildingEmbodiedKWhPerM2: 315,
+    embodiedEvidence: {
+      sourced: false, confidence: 'assumption',
+      sourceBoundary: 'unsourced screening assumption',
+      note: 'No qualifying range exists. The nearest single case (Brewster 2017) reports 6,747 kWh/m2 inclusive of allocated common structure on a broader boundary - about 21x this value, and ordered ABOVE detached rather than below it. Context only; not a default.',
+    },
   },
   tower_apartment_mid: {
     id: 'tower_apartment_mid', label: 'Tower middle apartment',
@@ -175,8 +221,44 @@ export const DWELLING_ARCHETYPES: Record<DwellingArchetype, DwellingArchetypePro
     exposedEnvelopeFraction: 0.36, sharedConditionedBoundaryPercent: 64,
     summerNeighbourShadePercent: 39, winterSolarAccessPercent: 61,
     riserHeightM: 36, buildingEmbodiedKWhPerM2: 365,
+    embodiedEvidence: {
+      sourced: false, confidence: 'assumption',
+      sourceBoundary: 'unsourced screening assumption',
+      note: 'No qualifying range exists. The nearest single case (Brewster 2017) reports 6,900 kWh/m2 inclusive of allocated common structure on a broader boundary. Context only; not a default.',
+    },
   },
 };
+
+/**
+ * Screening constraints.
+ *
+ * These replace the previous practice of multiplying comfort deviation, noise
+ * and mass-balance residual into "kWh" and adding them to the objective. The
+ * comfort term alone was ~30% of the score at a rate of 75 kWh per K per m2 per
+ * year - roughly three times the entire dwelling's annual energy intensity for
+ * one kelvin - and it reordered candidates.
+ *
+ * The source audit (docs/REFERENCE_DATA_HANDOFF.md) is explicit that there is
+ * NO accepted conversion from temperature deviation to an energy penalty, and
+ * that comfort belongs in a constraint with exceedance reported separately.
+ * ASHRAE 55, EN 16798-1 and NatHERS were all checked: none prescribes a
+ * universal "within X K for Y% of occupied hours" either.
+ *
+ * So these limits are PROJECT-SPECIFIED screening choices, not sourced
+ * quantities, and they are labelled as such wherever they surface. They gate
+ * feasibility; they never contribute energy.
+ */
+export const SCREENING_CONSTRAINTS = {
+  /** Mean predicted deviation from setpoint, K. Project choice, not sourced. */
+  comfortDeviationLimitC: 1.2,
+  /** Project choice, not sourced. */
+  noiseLimitDbA: 36,
+  /** Solver conservation tolerance, L/s. Numerical, not a comfort quantity. */
+  massBalanceToleranceLs: 0.1,
+  /** Recorded so the UI can cite what the constraint is and is not. */
+  basis: 'project-specified screening constraint; no standard prescribes a universal K-for-percent-of-hours limit',
+  comfortStandardReference: COMFORT_CRITERIA.pmvSource,
+} as const;
 
 const round = (value: number, digits = 2) => {
   const scale = 10 ** digits;
@@ -384,9 +466,20 @@ function evaluateConfiguration(
   const maximumMassBalanceResidualLs = Math.max(...roomResults.map(room => Math.abs(room.massBalanceResidualLs)), 0);
   const sharedTransferFlowLs = network.flows.filter(flow => flow.kind === 'shared-cavity').reduce((sum, flow) => sum + flow.flowLs, 0);
   const totalLifecycleEnergyKWh = totalOperationalKWh * lifecycleYears + manufacturingTotalKWh;
-  const penalty = meanComfortDeviationC * floorAreaM2 * lifecycleYears * 75
-    + Math.max(0, estimatedNoiseDbA - 36) * lifecycleYears * 90
-    + maximumMassBalanceResidualLs * 10_000;
+  // Constraints, not energy. A candidate either satisfies them or it does not;
+  // nothing here is converted into kWh and folded into the objective.
+  const comfortExceedanceC = Math.max(0, meanComfortDeviationC - SCREENING_CONSTRAINTS.comfortDeviationLimitC);
+  const noiseExceedanceDbA = Math.max(0, estimatedNoiseDbA - SCREENING_CONSTRAINTS.noiseLimitDbA);
+  const massBalanceExceedanceLs = Math.max(0, maximumMassBalanceResidualLs - SCREENING_CONSTRAINTS.massBalanceToleranceLs);
+  const constraints = {
+    comfortPass: comfortExceedanceC <= 0,
+    noisePass: noiseExceedanceDbA <= 0,
+    massBalancePass: massBalanceExceedanceLs <= 0,
+    comfortExceedanceC: round(comfortExceedanceC, 3),
+    noiseExceedanceDbA: round(noiseExceedanceDbA, 2),
+    massBalanceExceedanceLs: round(massBalanceExceedanceLs, 4),
+  };
+  const feasible = constraints.comfortPass && constraints.noisePass && constraints.massBalancePass;
 
   return {
     configuration,
@@ -414,8 +507,12 @@ function evaluateConfiguration(
       estimatedNoiseDbA: round(estimatedNoiseDbA, 1),
       sharedTransferFlowLs: round(sharedTransferFlowLs, 1),
     },
+    constraints,
+    feasible,
     totalLifecycleEnergyKWh: round(totalLifecycleEnergyKWh),
-    score: round(totalLifecycleEnergyKWh + penalty),
+    // The objective is lifecycle energy alone. Constraints gate feasibility and
+    // are reported separately; they are never added to the objective.
+    score: round(totalLifecycleEnergyKWh),
   };
 }
 
@@ -461,7 +558,13 @@ export function optimizeWholeHouseSystem(rawInput: WholeHouseOptimizerInput = {}
   const baseline = evaluateConfiguration(rooms, location, baselineConfiguration, lifecycleYears, hvacCop, climate, siteObstruction);
   const evaluated = configurations.map(configuration => evaluateConfiguration(
     rooms, location, configuration, lifecycleYears, hvacCop, climate, siteObstruction,
-  )).sort((a, b) => a.score - b.score || a.totalLifecycleEnergyKWh - b.totalLifecycleEnergyKWh);
+  )).sort((a, b) => (
+    // Constrained ranking: feasible candidates first, then lowest lifecycle
+    // energy. Previously an invented comfort/noise/mass-balance energy penalty
+    // was added to the objective and reordered candidates.
+    Number(b.feasible) - Number(a.feasible)
+    || a.totalLifecycleEnergyKWh - b.totalLifecycleEnergyKWh
+  ));
   const best = evaluated[0] || baseline;
   const bestByArchetype = new Map<DwellingArchetype, EvaluatedWholeHouseConfiguration>();
   evaluated.forEach(candidate => {
@@ -495,6 +598,8 @@ export function optimizeWholeHouseSystem(rawInput: WholeHouseOptimizerInput = {}
       lifecycleEnergyKWh: candidate.totalLifecycleEnergyKWh,
       annualEnergyVsDetachedPercent: round(annualDelta, 1),
       lifecycleEnergyVsDetachedPercent: round(lifecycleDelta, 1),
+      embodiedKWhPerM2: profile.buildingEmbodiedKWhPerM2,
+      embodiedEvidence: profile.embodiedEvidence,
       tradeoff,
     };
   });
@@ -518,8 +623,7 @@ export function optimizeWholeHouseSystem(rawInput: WholeHouseOptimizerInput = {}
   const annualSaved = baseline.annual.totalOperationalKWh - best.annual.totalOperationalKWh;
   const lifecycleSaved = baseline.totalLifecycleEnergyKWh - best.totalLifecycleEnergyKWh;
   const manufacturingDifference = best.manufacturing.totalKWh - baseline.manufacturing.totalKWh;
-  const qualifies = lifecycleSaved > 0 && best.performance.meanComfortDeviationC <= 1.2
-    && best.performance.maximumMassBalanceResidualLs < 0.1;
+  const qualifies = lifecycleSaved > 0 && best.feasible;
 
   return {
     location,
@@ -542,10 +646,10 @@ export function optimizeWholeHouseSystem(rawInput: WholeHouseOptimizerInput = {}
       manufacturingEnergyDifferenceKWh: round(manufacturingDifference),
       lowestLifecycleEnergyAlternative,
       reason: qualifies
-        ? `${DWELLING_ARCHETYPES[best.configuration.archetype].label} with ${best.configuration.control.replaceAll('_', ' ')} has the lowest screened score, which ranks lifecycle energy together with comfort, noise and mass-balance penalties.`
+        ? `${DWELLING_ARCHETYPES[best.configuration.archetype].label} with ${best.configuration.control.replaceAll('_', ' ')} has the lowest screened lifecycle energy among candidates meeting the comfort, noise and mass-balance constraints.`
           + (lowestLifecycleEnergyAlternative
-            ? ` It is not the lowest-energy option: ${lowestLifecycleEnergyAlternative.label} screens ${Math.abs(lowestLifecycleEnergyAlternative.additionalLifecycleEnergyOfSelectionKWh).toFixed(0)} kWh lower on lifecycle energy alone, and is ranked below only because of those penalties.`
-            : ' It is also the lowest-energy option in this sweep.')
+            ? ` A lower-energy candidate exists but does not meet those constraints: ${lowestLifecycleEnergyAlternative.label} screens ${Math.abs(lowestLifecycleEnergyAlternative.additionalLifecycleEnergyOfSelectionKWh).toFixed(0)} kWh lower and was excluded, not out-scored.`
+            : ' It is the lowest-energy candidate in this sweep outright.')
         : 'No candidate clears both the lifecycle-energy and comfort/mass-balance gates; keep the baseline until inputs are verified.',
     },
     assumptions: [
@@ -556,8 +660,9 @@ export function optimizeWholeHouseSystem(rawInput: WholeHouseOptimizerInput = {}
         ? 'Neighbouring-building shade is adjusted with a cached massing horizon screen; the 3D sun view casts the selected hour through those footprint-derived masses.'
         : 'Neighbouring-building shade is an archetype estimate. The 3D sun view uses the selected latitude and the optimized local footprint for directional shadow testing.',
       'Manufacturing energy includes a per-dwelling structure allowance plus ducts, openings, controls and heat recovery so operational savings cannot hide a larger build cost.',
+      `Embodied-energy factors are UNSOURCED screening assumptions, and they - not the ${evaluated.length}-candidate sweep - decide which archetype wins. A source audit found a qualifying Australian range for detached dwellings only (about 4.5x the value used here, on an older boundary) and none at all for terrace or apartment forms. Substituting published-order factors reverses the ranking. Treat the archetype result as a restatement of these constants until product EPD data replaces them.`,
       `Preset degree days are re-evaluated at the ${round(targetTempC, 1)} degC indoor setpoint from an annual temperature profile fitted to the preset pair at a ${DEFAULT_DEGREE_DAY_BASE_TEMP_C} degC base. This is a climatology screen, not hourly weather; a preset with zero heating or zero cooling degree days constrains the annual swing poorly and extrapolates optimistically away from the base.`,
-      'Candidate selection minimises a screening score that adds comfort, noise and mass-balance penalties to lifecycle energy. Those penalty weights are calibration constants, not measured quantities, and can reorder candidates.',
+      `Candidate selection minimises lifecycle energy alone. Comfort, noise and mass balance are feasibility constraints and are reported separately; no accepted conversion from temperature deviation to energy exists (ASHRAE 55, EN 16798-1 and NatHERS were checked), so none is applied. The ${SCREENING_CONSTRAINTS.comfortDeviationLimitC} K comfort limit and ${SCREENING_CONSTRAINTS.noiseLimitDbA} dBA noise limit are project-specified screening choices, not sourced quantities.`,
     ],
   };
 }
