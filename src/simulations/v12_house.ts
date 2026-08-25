@@ -509,6 +509,37 @@ export class V12HouseEngine {
   private _heightAirflowSweepSignature: string = '';
   private _heightAirflowSweepRuns: number = 0;
 
+  // ── Deterministic pseudo-random source ──
+  // CLAUDE.md requires reproducible calculations with a reported seed. An
+  // unseeded this._random() drove the Brownian weather-noise accumulator into
+  // _outsideTemp, which is bucketed into the height-sweep cache signature, so
+  // the sweep re-ran whenever the noise happened to walk across a 2 degC
+  // bucket boundary. That made the determinism assertion in
+  // scripts/height-airflow-smoke.ts fail intermittently (~20% of runs) with
+  // heightSweepRuns 2 !== 1. Seeded here so the engine is reproducible.
+  private _rngSeed: number = 0x9e3779b9;
+  private _rngState: number = 0x9e3779b9;
+
+  /** mulberry32 - small, fast, deterministic for a given seed. */
+  private _random(): number {
+    this._rngState = (this._rngState + 0x6d2b79f5) >>> 0;
+    let t = this._rngState;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  }
+
+  /** Reseed the engine's stochastic weather/mutation paths and restart the stream. */
+  public setRandomSeed(seed: number): void {
+    this._rngSeed = seed >>> 0;
+    this._rngState = seed >>> 0;
+  }
+
+  /** The seed currently driving every stochastic path in this engine. */
+  public getRandomSeed(): number {
+    return this._rngSeed;
+  }
+
   // ── Nested sims ──
   private _eskyZones: EskyZone[] = [];
   private _magnetocaloricUnits: MagnetocaloricUnit[] = [];
@@ -1111,7 +1142,7 @@ export class V12HouseEngine {
     const diurnalSwing = 5.0 * Math.cos(diurnalPhase);
 
     // Random weather noise: brownian motion style, +/- 3 deg C
-    this._weatherNoiseAccum += (Math.random() - 0.5) * 0.6;
+    this._weatherNoiseAccum += (this._random() - 0.5) * 0.6;
     this._weatherNoiseAccum *= 0.97; // decay toward zero
     this._weatherNoiseAccum = Math.max(-3, Math.min(3, this._weatherNoiseAccum));
 
@@ -1119,7 +1150,7 @@ export class V12HouseEngine {
     this._outsideTemp = ac.outsideTemp;
 
     // Cloud cover: random walk 0-1
-    ac.cloudCover += (Math.random() - 0.5) * 0.08;
+    ac.cloudCover += (this._random() - 0.5) * 0.08;
     ac.cloudCover = Math.max(0, Math.min(1, ac.cloudCover));
 
     // Solar irradiance: sun angle * season * (1 - cloudCover)
@@ -1133,14 +1164,14 @@ export class V12HouseEngine {
 
     // Wind speed: base from climate data + random variation 0-8 m/s
     const baseWind = climate.windSpeed;
-    ac.windSpeed += (Math.random() - 0.5) * 0.4;
+    ac.windSpeed += (this._random() - 0.5) * 0.4;
     ac.windSpeed = Math.max(0, Math.min(8, ac.windSpeed));
     // Bias toward climate average
     ac.windSpeed += (baseWind - ac.windSpeed) * 0.05;
     this._windSpeed = ac.windSpeed;
 
     // Wind direction: slow random walk (radians)
-    ac.windDirection += (Math.random() - 0.5) * 0.1;
+    ac.windDirection += (this._random() - 0.5) * 0.1;
   }
 
   // ═══════════════════════════════════════════════════════════════
@@ -1502,16 +1533,16 @@ export class V12HouseEngine {
         if (room.vents) allVents.push(...room.vents);
       }
       if (allVents.length > 0) {
-        const vent = allVents[Math.floor(Math.random() * allVents.length)];
-        const action = Math.random();
+        const vent = allVents[Math.floor(this._random() * allVents.length)];
+        const action = this._random();
         if (action < 0.35) {
           // Adjust flow rate +-20%
-          vent.flowRate = Math.max(0.005, Math.min(0.08, (vent.flowRate || 0.02) * (0.8 + Math.random() * 0.4)));
+          vent.flowRate = Math.max(0.005, Math.min(0.08, (vent.flowRate || 0.02) * (0.8 + this._random() * 0.4)));
         } else if (action < 0.55) {
           // Nudge position by 1-2 cells
           if (vent.position) {
-            vent.position.x += (Math.random() - 0.5) * this._cellSize * 2;
-            vent.position.y += (Math.random() - 0.5) * this._cellSize * 2;
+            vent.position.x += (this._random() - 0.5) * this._cellSize * 2;
+            vent.position.y += (this._random() - 0.5) * this._cellSize * 2;
           }
         } else if (action < 0.8) {
           // Height is now a searched variable. Keep vents clear of the floor
@@ -1520,12 +1551,12 @@ export class V12HouseEngine {
           if (room && vent.position) {
             vent.position.z = Math.max(0.08, Math.min(
               room.ceilingHeight - 0.08,
-              vent.position.z + (Math.random() - 0.5) * room.ceilingHeight * 0.25,
+              vent.position.z + (this._random() - 0.5) * room.ceilingHeight * 0.25,
             ));
           }
         } else {
           // Diameter is stored in millimetres.
-          vent.diameter = Math.max(80, Math.min(350, (vent.diameter || 150) * (0.85 + Math.random() * 0.3)));
+          vent.diameter = Math.max(80, Math.min(350, (vent.diameter || 150) * (0.85 + this._random() * 0.3)));
         }
         this._ventOptCycle++;
         this._equilibriumFound = false; // reset — let it re-converge
@@ -2497,7 +2528,7 @@ export class V12HouseEngine {
 
     // ── Rainwater: daily collection based on roof area ──
     const roofArea = totalRoomArea * 1.2;
-    const dailyRainMM = Math.random() < 0.3 ? 2 + Math.random() * 8 : 0; // 30% chance of rain
+    const dailyRainMM = this._random() < 0.3 ? 2 + this._random() * 8 : 0; // 30% chance of rain
     this._electricalState.rainwaterStoredL += roofArea * dailyRainMM * 0.8;
     if (this._electricalState.rainwaterStoredL > roofArea * 50) {
       this._electricalState.rainwaterStoredL = roofArea * 50; // Tank capacity
@@ -3326,8 +3357,8 @@ export class V12HouseEngine {
     const w = new Float32Array(n);
     for (let i = 0; i < n; i++) {
       // Box-Muller transform for normal distribution
-      const u1 = Math.random() || 0.001;
-      const u2 = Math.random();
+      const u1 = this._random() || 0.001;
+      const u2 = this._random();
       w[i] = Math.sqrt(-2 * Math.log(u1)) * Math.cos(2 * Math.PI * u2) * stddev;
     }
     return w;
@@ -3733,19 +3764,19 @@ export class V12HouseEngine {
     // ── Material Composition Optimization ──
     if (this._materialNet && this._iteration % 200 === 0) {
       // Try random material mutation
-      const basePanelIdx = Math.floor(Math.random() * this._solarPanels.length);
+      const basePanelIdx = Math.floor(this._random() * this._solarPanels.length);
       const basePanel = this._solarPanels[basePanelIdx];
 
       // Mutate a layer
       const mutatedLayers = basePanel.layers.map(l => ({ ...l }));
-      const layerIdx = Math.floor(Math.random() * mutatedLayers.length);
+      const layerIdx = Math.floor(this._random() * mutatedLayers.length);
       const layer = mutatedLayers[layerIdx];
 
       // Random mutations
-      layer.thickness *= (0.8 + Math.random() * 0.4);
-      layer.bandgap += (Math.random() - 0.5) * 0.2;
+      layer.thickness *= (0.8 + this._random() * 0.4);
+      layer.bandgap += (this._random() - 0.5) * 0.2;
       layer.bandgap = Math.max(0, Math.min(3.5, layer.bandgap));
-      layer.absorbance = Math.max(0, Math.min(1, layer.absorbance + (Math.random() - 0.5) * 0.1));
+      layer.absorbance = Math.max(0, Math.min(1, layer.absorbance + (this._random() - 0.5) * 0.1));
 
       // Predict efficiency using material net
       const mInput = new Float32Array(8);
