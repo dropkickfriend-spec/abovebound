@@ -1,0 +1,15 @@
+.git
+.gitignore
+.vercel
+.wrangler
+node_modules
+dist
+build
+coverage
+data
+discovery_memory.json
+.env
+.env.*
+*.log
+DEPLOY_INSTRUCTIONS.md
+deployment.md

@@ -1,0 +1,45 @@
+services:
+  app:
+    build:
+      context: .
+    restart: unless-stopped
+    init: true
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      DATA_DIR: /app/data
+      APP_URL: https://abovebound.org
+      NODE_ID: ${NODE_ID:-abovebound-aws-1}
+      PEER_NODES: ${PEER_NODES:-}
+      JSON_BODY_LIMIT: ${JSON_BODY_LIMIT:-2mb}
+      API_MUTATION_RATE_LIMIT: ${API_MUTATION_RATE_LIMIT:-120}
+      WS_MAX_PAYLOAD_BYTES: ${WS_MAX_PAYLOAD_BYTES:-1048576}
+    ports:
+      - "127.0.0.1:3000:3000"
+    volumes:
+      - beyondbound-data:/app/data
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - fetch('http://127.0.0.1:3000/api/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    restart: unless-stopped
+    init: true
+    command: tunnel --no-autoupdate run
+    environment:
+      TUNNEL_TOKEN: ${TUNNEL_TOKEN}
+    depends_on:
+      app:
+        condition: service_healthy
+
+volumes:
+  beyondbound-data:
+    name: beyondbound-data
