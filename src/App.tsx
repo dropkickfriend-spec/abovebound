@@ -6286,6 +6286,95 @@ const HouseView = ({
   );
 };
 
+const PRIDE_COOKIE_NAME = 'abovebound_pride_cookie_choice';
+
+const PrideGlitter = () => <div className="pride-glitter" aria-hidden="true" />;
+
+const CookieConsent = () => {
+  const [visible, setVisible] = useState(() => {
+    if (typeof document === 'undefined' || typeof localStorage === 'undefined') return false;
+    const accepted = document.cookie.split('; ').some((cookie) => cookie.startsWith(`${PRIDE_COOKIE_NAME}=`));
+    const declined = localStorage.getItem(PRIDE_COOKIE_NAME) === 'declined';
+    return !accepted && !declined;
+  });
+
+  const acceptCookie = () => {
+    document.cookie = `${PRIDE_COOKIE_NAME}=accepted; Max-Age=31536000; Path=/; SameSite=Lax`;
+    localStorage.removeItem(PRIDE_COOKIE_NAME);
+    setVisible(false);
+  };
+
+  const declineCookie = () => {
+    localStorage.setItem(PRIDE_COOKIE_NAME, 'declined');
+    setVisible(false);
+  };
+
+  if (!visible) return null;
+
+  return (
+    <section
+      aria-label="Cookie consent"
+      className="fixed inset-x-3 bottom-3 md:inset-x-auto md:right-6 md:bottom-6 z-[200] md:max-w-md pride-glass rounded-3xl p-5 md:p-6"
+    >
+      <div className="flex items-start gap-4">
+        <div className="text-4xl" aria-hidden="true">🍪</div>
+        <div className="min-w-0">
+          <div className="text-[10px] font-black uppercase tracking-[0.28em] text-pink-200">Cookie request // it&apos;s not gay</div>
+          <h2 className="mt-2 text-xl font-black uppercase leading-none pride-rainbow-text">Can we have one tiny cookie?</h2>
+          <p className="mt-3 text-[11px] leading-relaxed text-white/75">
+            It only remembers this answer. No ad tracking, no location lookup, no third-party nonsense—and the glitter works either way.
+          </p>
+        </div>
+      </div>
+      <div className="mt-5 grid grid-cols-2 gap-3">
+        <button type="button" onClick={declineCookie} className="rounded-xl border border-white/20 bg-white/5 px-4 py-3 text-[10px] font-black uppercase tracking-widest text-white/70 hover:bg-white/10">
+          No thanks
+        </button>
+        <button type="button" onClick={acceptCookie} className="rounded-xl bg-pink-400 px-4 py-3 text-[10px] font-black uppercase tracking-widest text-black shadow-[0_0_24px_rgba(244,114,182,0.65)] hover:bg-yellow-200">
+          Fine, one cookie
+        </button>
+      </div>
+    </section>
+  );
+};
+
+const FakeLocalMenAd = () => {
+  const [revealed, setRevealed] = useState(false);
+
+  return (
+    <aside className="pride-glass relative overflow-hidden rounded-3xl p-5" aria-label="Parody advertisement">
+      <div className="absolute -right-8 -top-8 h-28 w-28 rounded-full bg-pink-400/30 blur-2xl" />
+      <div className="relative">
+        <div className="flex items-center justify-between gap-3">
+          <span className="rounded-full bg-yellow-200 px-2.5 py-1 text-[8px] font-black uppercase tracking-[0.2em] text-fuchsia-950">Fake ad</span>
+          <span className="text-[8px] font-bold uppercase tracking-widest text-white/45">Parody · no location used</span>
+        </div>
+        <div className="mt-4 flex items-center gap-4">
+          <div className="flex -space-x-3" aria-hidden="true">
+            {['🧔🏽‍♂️', '👨🏻‍🔧', '👨🏿‍🏫'].map((face, index) => (
+              <div key={face} className="grid h-12 w-12 place-items-center rounded-full border-2 border-pink-200 bg-fuchsia-950 text-2xl" style={{ zIndex: 3 - index }}>
+                {face}
+              </div>
+            ))}
+          </div>
+          <div>
+            <h3 className="text-xl font-black uppercase leading-[0.9] text-white">Local men near you</h3>
+            <p className="mt-2 text-[10px] font-bold uppercase tracking-widest text-pink-200">want to discuss your U-values</p>
+          </div>
+        </div>
+        <button type="button" onClick={() => setRevealed((value) => !value)} className="mt-5 w-full rounded-xl bg-gradient-to-r from-yellow-200 via-white to-cyan-200 px-4 py-3 text-[10px] font-black uppercase tracking-widest text-fuchsia-950 transition-transform hover:scale-[1.01] active:scale-[0.99]">
+          {revealed ? 'Okay, put the clipboard away' : 'Inspect their thermal envelope'}
+        </button>
+        {revealed && (
+          <p className="mt-3 rounded-xl border border-white/15 bg-black/25 p-3 text-[9px] leading-relaxed text-white/70">
+            None of these men exist. AboveBound did not read your location. They are, however, extremely interested in airtightness, sensible shading and a respectful blower-door test.
+          </p>
+        )}
+      </div>
+    </aside>
+  );
+};
+
 export default function AppWrapper() {
   return (
     <ErrorBoundary>
@@ -7851,7 +7940,9 @@ function App() {
   };
 
   return (
-    <div className="min-h-screen bg-[#050505] text-white font-sans selection:bg-cyan-500/30">
+    <div className="pride-app min-h-screen text-white font-sans selection:bg-yellow-200 selection:text-fuchsia-950">
+      <PrideGlitter />
+      <CookieConsent />
       <output
         aria-label="simulation diagnostics"
         className="sr-only"
@@ -7873,7 +7964,7 @@ function App() {
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="fixed inset-0 z-[100] bg-[#050505] flex items-center justify-center p-6 overflow-y-auto"
+            className="pride-splash fixed inset-0 z-[100] flex items-center justify-center p-6 overflow-y-auto"
           >
             <div className="max-w-4xl w-full space-y-12 py-12">
               <div className="text-center space-y-4">
@@ -7881,7 +7972,7 @@ function App() {
                   initial={{ y: 20, opacity: 0 }}
                   animate={{ y: 0, opacity: 1 }}
                   transition={{ delay: 0.2 }}
-                  className="inline-block p-3 bg-cyan-500 rounded-2xl shadow-[0_0_30px_rgba(6,182,212,0.5)] mb-4"
+                  className="inline-block p-3 bg-gradient-to-br from-yellow-200 via-pink-300 to-cyan-300 rounded-2xl shadow-[0_0_34px_rgba(255,255,255,0.55)] mb-4"
                 >
                   <Activity size={48} className="text-black" />
                 </motion.div>
@@ -7891,15 +7982,15 @@ function App() {
                   transition={{ delay: 0.3 }}
                   className="text-6xl font-black tracking-tighter uppercase italic"
                 >
-                  BeyondBound <span className="text-cyan-500">OS</span>
+                  BeyondBound <span className="pride-rainbow-text">PRIDE</span>
                 </motion.h1>
                 <motion.p 
                   initial={{ y: 20, opacity: 0 }}
                   animate={{ y: 0, opacity: 1 }}
                   transition={{ delay: 0.4 }}
-                  className="text-gray-500 font-mono text-sm tracking-widest uppercase"
+                  className="text-pink-100/80 font-mono text-sm tracking-widest uppercase"
                 >
-                  Exclusion Principle Simulation & Generative Design
+                  Serious building physics. Extremely unserious colour palette.
                 </motion.p>
               </div>
 
@@ -7910,7 +8001,7 @@ function App() {
                     initial={{ y: 20, opacity: 0 }}
                     animate={{ y: 0, opacity: 1 }}
                     transition={{ delay: 0.5 + i * 0.1 }}
-                    className="p-8 bg-white/5 rounded-3xl border border-white/10 hover:border-cyan-500/50 transition-all group"
+                    className="pride-glass p-8 rounded-3xl hover:border-yellow-200/70 transition-all group"
                   >
                     <div className="flex items-center gap-3 mb-6">
                       {cat.icon}
@@ -7921,7 +8012,7 @@ function App() {
                         <button
                           key={sub.id}
                           onClick={() => selectSubcat(sub)}
-                          className="w-full text-left p-3 rounded-xl hover:bg-white/5 text-gray-400 hover:text-white transition-all flex items-center justify-between group/item"
+                          className="w-full text-left p-3 rounded-xl bg-white/[0.03] hover:bg-white/10 text-white/75 hover:text-white transition-all flex items-center justify-between group/item"
                         >
                           <span className="text-xs font-bold uppercase tracking-widest">{sub.label}</span>
                           <ChevronRight size={14} className="opacity-0 group-hover/item:opacity-100 transition-all" />
@@ -7940,7 +8031,7 @@ function App() {
               >
                 <button 
                   onClick={() => setShowSplash(false)}
-                  className="text-[10px] font-bold text-gray-600 uppercase tracking-[0.3em] hover:text-gray-400 transition-all"
+                    className="text-[10px] font-bold text-white/65 uppercase tracking-[0.3em] hover:text-white transition-all"
                 >
                   Skip to Dashboard
                 </button>
@@ -7949,13 +8040,16 @@ function App() {
           </motion.div>
         )}
       </AnimatePresence>
-      <header className="border-b border-white/10 bg-black/50 backdrop-blur-md sticky top-0 z-50">
+      <header className="border-b border-white/20 bg-fuchsia-950/80 backdrop-blur-xl sticky top-0 z-50 shadow-[0_10px_40px_rgba(88,0,72,0.35)]">
         <div className="max-w-7xl mx-auto px-4 md:px-6 h-16 flex items-center justify-between gap-4">
           <div className="flex items-center gap-3 cursor-pointer shrink-0" onClick={() => setShowSplash(true)}>
-            <div className="w-8 h-8 bg-cyan-500 rounded flex items-center justify-center shadow-[0_0_15px_rgba(6,182,212,0.5)]">
+            <div className="w-8 h-8 bg-gradient-to-br from-yellow-200 via-pink-300 to-cyan-300 rounded flex items-center justify-center shadow-[0_0_18px_rgba(255,255,255,0.55)]">
               <Activity size={20} className="text-black" />
             </div>
-            <h1 className="text-lg md:text-xl font-black tracking-tighter uppercase hidden sm:block">BeyondBound</h1>
+            <div className="hidden sm:block">
+              <h1 className="text-lg md:text-xl font-black tracking-tighter uppercase">BeyondBound <span className="pride-rainbow-text">Pride</span></h1>
+              <div className="text-[7px] font-black uppercase tracking-[0.22em] text-pink-200">It&apos;s not gay. It&apos;s thermodynamics.</div>
+            </div>
           </div>
           
           <div className="flex-1 flex items-center justify-center gap-2 overflow-x-auto no-scrollbar py-2">
@@ -8505,6 +8599,7 @@ function App() {
 
         {/* Right Column: Blueprints & Config */}
         <div className="lg:col-span-4 space-y-6">
+          <FakeLocalMenAd />
           <AutonomousCore state={autonomousState} />
           
           <SimulationChainUI 
@@ -8754,7 +8849,7 @@ function App() {
       <footer className="border-t border-white/10 mt-12 py-8 bg-black/30">
         <div className="max-w-7xl mx-auto px-6 flex flex-col md:flex-row justify-between items-center gap-4">
           <div className="text-[10px] text-gray-500 font-bold uppercase tracking-[0.2em]">
-            &copy; 2026 BeyondBound Systems | Deep Learning Physics Engine
+            &copy; 2026 BeyondBound Systems | Pride, physics &amp; suspicious amounts of glitter
           </div>
           <div className="flex gap-6">
             <a href="#" className="text-[10px] text-gray-500 hover:text-white transition-colors uppercase font-bold tracking-widest">Documentation</a>
