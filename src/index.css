@@ -1,11 +1,106 @@
 @import "tailwindcss";
 
 html, body, #root {
-  background-color: black;
+  background-color: #ff1493;
   color: white;
   margin: 0;
   padding: 0;
   min-height: 100vh;
   width: 100%;
   overflow-x: hidden;
+}
+
+.pride-app {
+  position: relative;
+  isolation: isolate;
+  min-height: 100vh;
+  background:
+    radial-gradient(circle at 12% 10%, rgba(255, 245, 157, 0.42), transparent 24rem),
+    radial-gradient(circle at 88% 18%, rgba(87, 226, 255, 0.42), transparent 28rem),
+    radial-gradient(circle at 52% 88%, rgba(168, 85, 247, 0.52), transparent 34rem),
+    linear-gradient(135deg, #ff1493 0%, #ff4fbd 46%, #c026d3 72%, #6d28d9 100%);
+  background-attachment: fixed;
+}
+
+.pride-app::after {
+  content: "";
+  position: fixed;
+  inset: 0 0 auto;
+  z-index: 80;
+  height: 5px;
+  pointer-events: none;
+  background: linear-gradient(90deg, #e40303 0 16.66%, #ff8c00 16.66% 33.32%, #ffed00 33.32% 49.98%, #008026 49.98% 66.64%, #004dff 66.64% 83.3%, #750787 83.3% 100%);
+  box-shadow: 0 0 18px rgba(255, 255, 255, 0.9);
+}
+
+.pride-splash {
+  background:
+    radial-gradient(circle at 50% 35%, rgba(255, 255, 255, 0.22), transparent 24rem),
+    linear-gradient(145deg, rgba(255, 20, 147, 0.98), rgba(126, 34, 206, 0.98));
+}
+
+.pride-glitter {
+  position: fixed;
+  inset: 0;
+  z-index: 45;
+  overflow: hidden;
+  pointer-events: none;
+  mix-blend-mode: screen;
+}
+
+.pride-glitter::before,
+.pride-glitter::after {
+  content: "";
+  position: absolute;
+  inset: -20%;
+  opacity: 0.72;
+  background-image:
+    radial-gradient(circle, #ffffff 0 1px, transparent 2px),
+    radial-gradient(circle, #fff7a8 0 1.5px, transparent 2.5px),
+    radial-gradient(circle, #7dd3fc 0 1px, transparent 2px),
+    radial-gradient(circle, #f0abfc 0 1.5px, transparent 2.5px);
+  background-position: 0 0, 35px 55px, 75px 20px, 105px 85px;
+  background-size: 96px 96px, 132px 132px, 118px 118px, 154px 154px;
+  animation: pride-glitter-drift 14s linear infinite;
+}
+
+.pride-glitter::after {
+  transform: rotate(18deg) scale(1.08);
+  opacity: 0.42;
+  animation-duration: 22s;
+  animation-direction: reverse;
+}
+
+.pride-glass {
+  background: linear-gradient(145deg, rgba(39, 0, 28, 0.92), rgba(28, 0, 55, 0.9));
+  border: 1px solid rgba(255, 255, 255, 0.24);
+  box-shadow: 0 24px 80px rgba(96, 0, 86, 0.38), inset 0 1px 0 rgba(255, 255, 255, 0.16);
+  backdrop-filter: blur(20px);
+}
+
+.pride-rainbow-text {
+  color: transparent;
+  background: linear-gradient(90deg, #ffef72, #ffffff, #7dd3fc, #f0abfc, #ffffff, #ffef72);
+  background-size: 220% 100%;
+  background-clip: text;
+  -webkit-background-clip: text;
+  animation: pride-rainbow-slide 5s linear infinite;
+}
+
+@keyframes pride-glitter-drift {
+  from { transform: translate3d(-2%, -2%, 0) rotate(0deg); }
+  50% { transform: translate3d(2%, 3%, 0) rotate(1deg); }
+  to { transform: translate3d(-2%, -2%, 0) rotate(0deg); }
+}
+
+@keyframes pride-rainbow-slide {
+  to { background-position: -220% 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pride-glitter::before,
+  .pride-glitter::after,
+  .pride-rainbow-text {
+    animation: none;
+  }
 }
